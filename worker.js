@@ -32,7 +32,9 @@ export default {
             "👋 Welcome! I build websites for you.\n\n" +
             "Just tell me what kind of website you want. For example:\n" +
             "\"A bakery website with a menu and contact form\"\n\n" +
-            "I'll generate it and give you a live link."
+            "I'll generate it and give you a live link.\n\n" +
+            "By using this bot, you agree to our Terms: " +
+            "https://github.com/B0bbybr0wnn/Website-bot/blob/main/terms.md"
           );
           return new Response("OK", { status: 200 });
         }
@@ -128,4 +130,4 @@ Make it modern, responsive, and beautiful.`;
   }
 
   return "Sorry, I couldn't generate the website. Error: " + JSON.stringify(data).substring(0, 200);
-    }
+      }
