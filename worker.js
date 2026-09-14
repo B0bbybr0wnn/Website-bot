@@ -1,5 +1,21 @@
 export default {
   async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    // Serve a generated site if someone visits /site/xxxxx
+    const siteMatch = url.pathname.match(/^\/site\/([a-zA-Z0-9]+)$/);
+    if (siteMatch && request.method === "GET") {
+      const siteId = siteMatch[1];
+      const html = await env.SITES.get(siteId);
+      if (html) {
+        return new Response(html, {
+          headers: { "Content-Type": "text/html; charset=utf-8" }
+        });
+      }
+      return new Response("Site not found", { status: 404 });
+    }
+
+    // Telegram webhook
     if (request.method !== "POST") {
       return new Response("Bot is running.", { status: 200 });
     }
@@ -32,23 +48,18 @@ export default {
           return new Response("OK", { status: 200 });
         }
 
-        const deployUrl = await deployToPages(
-          websiteCode,
-          env.CLOUDFLARE_API_TOKEN,
-          env.CLOUDFLARE_ACCOUNT_ID
-        );
+        // Save to KV and generate link
+        const siteId = generateId();
+        await env.SITES.put(siteId, websiteCode);
 
-        if (deployUrl) {
-          await sendMessage(env.TELEGRAM_TOKEN, chatId,
-            "✅ Your website is live!\n\n" +
-            "🔗 " + deployUrl + "\n\n" +
-            "Open the link to see it."
-          );
-        } else {
-          await sendMessage(env.TELEGRAM_TOKEN, chatId,
-            "❌ Website generated but deployment failed. Please try again."
-          );
-        }
+        const baseUrl = "https://website-bot.bobbyjohon8585.workers.dev";
+        const liveUrl = `${baseUrl}/site/${siteId}`;
+
+        await sendMessage(env.TELEGRAM_TOKEN, chatId,
+          "✅ Your website is live!\n\n" +
+          "🔗 " + liveUrl + "\n\n" +
+          "Open the link to see it."
+        );
       }
 
       return new Response("OK", { status: 200 });
@@ -59,6 +70,15 @@ export default {
     }
   }
 };
+
+function generateId() {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let id = "";
+  for (let i = 0; i < 10; i++) {
+    id += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return id;
+}
 
 async function sendMessage(token, chatId, text) {
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
@@ -108,47 +128,4 @@ Make it modern, responsive, and beautiful.`;
   }
 
   return "Sorry, I couldn't generate the website. Error: " + JSON.stringify(data).substring(0, 200);
-}
-
-async function deployToPages(htmlContent, apiToken, accountId) {
-  try {
-    const projectName = "user-sites";
-    const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/pages/projects/${projectName}/deployments`;
-
-    // Build multipart form data
-    const formData = new FormData();
-    formData.append("branch", "main");
-
-    // Create the HTML file blob
-    const htmlBlob = new Blob([htmlContent], { type: "text/html" });
-    formData.append("file", htmlBlob, "index.html");
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiToken}`
-      },
-      body: formData
-    });
-
-    const data = await response.json();
-
-    if (data.success && data.result) {
-      // Return the deployment URL or the project subdomain
-      if (data.result.url) {
-        return data.result.url;
-      }
-      if (data.result.aliases && data.result.aliases.length > 0) {
-        return "https://" + data.result.aliases[0];
-      }
-      return `https://${projectName}.pages.dev`;
     }
-
-    console.error("Pages deploy error:", JSON.stringify(data));
-    return null;
-
-  } catch (error) {
-    console.error("Deploy error:", error);
-    return null;
-  }
-        }
