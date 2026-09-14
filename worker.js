@@ -65,7 +65,7 @@ async function sendMessage(token, chatId, text) {
 
 // Call Gemini API to generate website HTML
 async function generateWebsite(userPrompt, apiKey) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
   const systemPrompt = `You are a website generator. The user will describe a website they want.
 Return ONLY the complete HTML file with inline CSS and JavaScript. No explanations, no markdown, just the raw HTML code.
@@ -79,7 +79,13 @@ Make it modern, responsive, and beautiful.`;
         parts: [{
           text: systemPrompt + "\n\nUser request: " + userPrompt
         }]
-      }]
+      }],
+      safetySettings: [
+        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+      ]
     })
   });
 
@@ -89,5 +95,7 @@ Make it modern, responsive, and beautiful.`;
     return data.candidates[0].content.parts[0].text;
   }
 
-  return "Sorry, I couldn't generate the website. Please try again.";
-          }
+  // Log the full error so we can debug
+  console.error("Gemini API error:", JSON.stringify(data));
+  return "Sorry, I couldn't generate the website. Error: " + JSON.stringify(data).substring(0, 200);
+                            }
