@@ -37,7 +37,6 @@ export default {
       return new Response("OK", { status: 200 });
     }
 
-    // Process in background so Telegram doesn't retry
     ctx.waitUntil(handleUpdate(update, env));
 
     return new Response("OK", { status: 200 });
@@ -142,7 +141,7 @@ async function handleUpdate(update, env) {
     await env.SITES.delete(`tier_${chatId}`);
 
   } catch (error) {
-    console.error("handleUpdate error:", error);
+    console.error("handleUpdate error:", error.message, error.stack);
   }
 }
 
@@ -151,10 +150,22 @@ async function handlePaystackWebhook(request, env) {
     const rawBody = await request.text();
     const body = JSON.parse(rawBody);
 
-    const crypto = await import("crypto");
-    const hash = crypto.createHmac("sha512", env.PAYSTACK_SECRET_KEY)
-      .update(rawBody)
-      .digest("hex");
+    // Verify signature using Web Crypto API (Workers-compatible)
+    const encoder = new TextEncoder();
+    const keyData = encoder.encode(env.PAYSTACK_SECRET_KEY);
+    const messageData = encoder.encode(rawBody);
+
+    const cryptoKey = await crypto.subtle.importKey(
+      "raw",
+      keyData,
+      { name: "HMAC", hash: "SHA-512" },
+      false,
+      ["sign"]
+    );
+
+    const signatureBuffer = await crypto.subtle.sign("HMAC", cryptoKey, messageData);
+    const hashArray = Array.from(new Uint8Array(signatureBuffer));
+    const hash = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
 
     const signature = request.headers.get("x-paystack-signature");
     if (hash !== signature) {
@@ -163,11 +174,11 @@ async function handlePaystackWebhook(request, env) {
     }
 
     if (body.event === "charge.success") {
-      const metadata = body.data.metadata;
-      const siteId = metadata && metadata.siteId;
-      const chatId = metadata && metadata.chatId;
+      const metadata = body.data.metadata || {};
+      const siteId = metadata.siteId;
+      const chatId = metadata.chatId;
 
-      if (siteId) {
+      if (siteId && chatId) {
         const data = await env.SITES.get(siteId, "json");
         if (data) {
           data.paid = true;
@@ -189,7 +200,7 @@ async function handlePaystackWebhook(request, env) {
     return new Response("OK", { status: 200 });
 
   } catch (error) {
-    console.error("Webhook error:", error);
+    console.error("Webhook error:", error.message, error.stack);
     return new Response("Error", { status: 500 });
   }
 }
@@ -216,7 +227,7 @@ async function initPaystack(chatId, amount, secretKey, siteId) {
     const data = await response.json();
     return data.data;
   } catch (error) {
-    console.error("Paystack init error:", error);
+    console.error("Paystack init error:", error.message);
     return null;
   }
 }
@@ -294,4 +305,4 @@ Make it modern, responsive, and beautiful.`;
   }
 
   return "⏳ *WebPanda is busy right now.*\n\nOur servers are handling a lot of requests at the moment. Please try again in a minute.";
-    }
+        }
