@@ -62,7 +62,23 @@ async function handleUpdate(update, env) {
         "🟣 *Complex* — ₦180,000\n" +
         "E-commerce, booking, blog, custom domain.\n\n" +
         "Reply with *starter*, *business*, or *complex* to continue.\n\n" +
-        "📜 [Terms and Conditions](https://github.com/B0bbybr0wnn/Website-bot/blob/main/terms.md)"
+        "📜 [Terms and Conditions](https://github.com/B0bbybr0wnn/Website-bot/blob/main/terms.md)\n\n" +
+        "💬 [Chat with Support](https://t.me/B0bb_y)"
+      );
+      return;
+    }
+
+    if (userText === "/support") {
+      await sendMessage(env.TELEGRAM_TOKEN, chatId,
+        `💬 *Need help?*\n\n` +
+        `Message me directly and I'll sort it out:\n` +
+        `👉 [Chat with support](https://t.me/B0bb_y)\n\n` +
+        `Common issues I can help with:\n` +
+        `• Payment didn't work\n` +
+        `• Site not loading\n` +
+        `• Custom domain setup\n` +
+        `• Refunds\n` +
+        `• Anything else`
       );
       return;
     }
@@ -87,10 +103,33 @@ async function handleUpdate(update, env) {
       return;
     }
 
+    if (userText === "/cancel") {
+      const tierData = await env.SITES.get(`tier_${chatId}`, "json");
+      if (tierData) {
+        await env.SITES.delete(`tier_${chatId}`);
+        const userSite = await env.SITES.get(`user_${chatId}`, "json");
+        if (userSite && userSite.siteId) {
+          await sendMessage(env.TELEGRAM_TOKEN, chatId,
+            `✅ Cancelled. You're back to your previous site.\n\n` +
+            `You can now send changes to it, or reply *starter*, *business*, or *complex* to start a new order.`
+          );
+        } else {
+          await sendMessage(env.TELEGRAM_TOKEN, chatId,
+            `✅ Cancelled.\n\nReply *starter*, *business*, or *complex* to start a new order.`
+          );
+        }
+      } else {
+        await sendMessage(env.TELEGRAM_TOKEN, chatId,
+          `Nothing to cancel. Reply *starter*, *business*, or *complex* to start a new order.`
+        );
+      }
+      return;
+    }
+
     if (userText === "/pay_tweak") {
       const userSite = await env.SITES.get(`user_${chatId}`, "json");
       if (!userSite) {
-        await sendMessage(env.TELEGRAM_TOKEN, chatId, "No active site found.");
+        await sendMessage(env.TELEGRAM_TOKEN, chatId, "No active site found. Reply /support if you need help.");
         return;
       }
 
@@ -100,20 +139,12 @@ async function handleUpdate(update, env) {
           `💳 *Pay ₦3,000 to unlock 5 more edits:*\n\n${paystackData.authorization_url}`
         );
       } else {
-        await sendMessage(env.TELEGRAM_TOKEN, chatId, "❌ Payment setup failed. Please try again.");
+        await sendMessage(env.TELEGRAM_TOKEN, chatId, "❌ Payment setup failed. Reply /support if this keeps happening.");
       }
       return;
     }
 
-    // Check if user has an active site (tweak mode)
-    const userSite = await env.SITES.get(`user_${chatId}`, "json");
-
-    if (userSite && userSite.siteId) {
-      await handleTweakRequest(chatId, userText, userSite, env);
-      return;
-    }
-
-    // Otherwise, normal tier flow
+    // FIRST: check if this is a tier selection (new site order)
     const lower = userText.toLowerCase();
     let tier = null;
     let price = 0;
@@ -126,35 +157,46 @@ async function handleUpdate(update, env) {
       await sendMessage(env.TELEGRAM_TOKEN, chatId,
         `✅ *${tier} plan* selected — ₦${price.toLocaleString()}\n\n` +
         "Now describe your website. For example:\n" +
-        "\"A bakery website with a menu and contact form\""
+        "\"A bakery website with a menu and contact form\"\n\n" +
+        `_Changed your mind? Reply /cancel_`
       );
       return;
     }
 
+    // SECOND: check if we're waiting for a site description
     const tierData = await env.SITES.get(`tier_${chatId}`, "json");
-    if (!tierData) {
+    if (tierData) {
+      const jobId = generateId();
+      await env.SITES.put(`job_${jobId}`, JSON.stringify({
+        jobId: jobId,
+        chatId: chatId,
+        userText: userText,
+        tier: tierData.tier,
+        price: tierData.price,
+        status: "pending",
+        createdAt: Date.now()
+      }));
+
       await sendMessage(env.TELEGRAM_TOKEN, chatId,
-        "Please pick a plan first: *starter*, *business*, or *complex*."
+        "⏳ Generating your website... this takes up to 1 minute."
       );
+
+      await env.SITES.delete(`tier_${chatId}`);
       return;
     }
 
-    const jobId = generateId();
-    await env.SITES.put(`job_${jobId}`, JSON.stringify({
-      jobId: jobId,
-      chatId: chatId,
-      userText: userText,
-      tier: tierData.tier,
-      price: tierData.price,
-      status: "pending",
-      createdAt: Date.now()
-    }));
+    // THIRD: if user has an active site, treat as tweak
+    const userSite = await env.SITES.get(`user_${chatId}`, "json");
+    if (userSite && userSite.siteId) {
+      await handleTweakRequest(chatId, userText, userSite, env);
+      return;
+    }
 
+    // Fallback
     await sendMessage(env.TELEGRAM_TOKEN, chatId,
-      "⏳ Generating your website... this takes up to 1 minute."
+      "Please pick a plan first: *starter*, *business*, or *complex*.\n\n" +
+      "💬 Need help? Reply /support"
     );
-
-    await env.SITES.delete(`tier_${chatId}`);
 
   } catch (error) {
     console.error("handleUpdate error:", error.message, error.stack);
@@ -169,7 +211,8 @@ async function handleTweakRequest(chatId, userText, userSite, env) {
       await sendMessage(env.TELEGRAM_TOKEN, chatId,
         `🔒 *You've used all your edits for this site.*\n\n` +
         `Want to make more changes? Pay *₦3,000* to unlock *5 more edits*.\n\n` +
-        `Reply */pay_tweak* to continue.`
+        `Reply */pay_tweak* to continue.\n` +
+        `💬 Need help? Reply /support`
       );
       return;
     }
@@ -247,7 +290,7 @@ async function processNewSiteJob(job, jobKey, env) {
 
   if (!paystackData || !paystackData.authorization_url) {
     await sendMessage(env.TELEGRAM_TOKEN, job.chatId,
-      "❌ Payment setup failed. Please try again."
+      "❌ Payment setup failed. Reply /support if this keeps happening."
     );
     await env.SITES.delete(jobKey);
     return;
@@ -259,7 +302,8 @@ async function processNewSiteJob(job, jobKey, env) {
     `_This is a preview with a watermark._\n\n` +
     `💳 To unlock your full website, pay *₦${job.price.toLocaleString()}*:\n` +
     `${paystackData.authorization_url}\n\n` +
-    `Once payment is confirmed, your site will be unlocked automatically.`
+    `Once payment is confirmed, your site will be unlocked automatically.\n\n` +
+    `💬 Need help? Reply /support`
   );
 
   await env.SITES.delete(jobKey);
@@ -373,6 +417,8 @@ async function handlePaystackWebhook(request, env) {
             `You can now request changes to your site — colors, text, phone number, anything. Just describe what you want changed and I'll apply it.\n\n` +
             `💡 Want a professional web address like *yourbusiness.com.ng* instead of that long link?\n` +
             `Reply /domain to learn more.\n\n` +
+            `—\n` +
+            `💬 Need help? Reply /support\n\n` +
             `Thank you for using WebPanda!`
           );
         }
@@ -508,4 +554,4 @@ async function callGemini(url, prompt) {
     }
   }
   return "⏳ *WebPanda is busy right now.* Please try again in a minute.";
-                                              }
+    }
