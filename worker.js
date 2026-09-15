@@ -9,7 +9,7 @@ export default {
     const siteMatch = url.pathname.match(/^\/site\/([a-zA-Z0-9]+)$/);
     if (siteMatch && request.method === "GET") {
       const siteId = siteMatch[1];
-      const data = await env.SITES.get(siteId, "json");
+      const data = await env.SITES.get(`site_${siteId}`, "json");
       if (!data) return new Response("Site not found", { status: 404 });
 
       let html = data.html;
@@ -49,22 +49,12 @@ async function handleUpdate(update, env) {
 
     const chatId = update.message.chat.id;
     const userText = update.message.text;
+    const lower = userText.toLowerCase().trim();
+
+    // === COMMANDS ===
 
     if (userText === "/start") {
-      await sendMessage(env.TELEGRAM_TOKEN, chatId,
-        "👋 Welcome to *WebPanda*!\n\n" +
-        "I build professional websites for you in seconds.\n\n" +
-        "Choose your plan:\n\n" +
-        "🟢 *Starter* — ₦50,000\n" +
-        "One-page landing site with basic features.\n\n" +
-        "🔵 *Business* — ₦85,000\n" +
-        "3-5 pages, contact forms, basic SEO.\n\n" +
-        "🟣 *Complex* — ₦180,000\n" +
-        "E-commerce, booking, blog, custom domain.\n\n" +
-        "Reply with *starter*, *business*, or *complex* to continue.\n\n" +
-        "📜 [Terms and Conditions](https://github.com/B0bbybr0wnn/Website-bot/blob/main/terms.md)\n\n" +
-        "💬 [Chat with Support](https://t.me/B0bb_y)"
-      );
+      await sendStartMessage(chatId, env);
       return;
     }
 
@@ -103,56 +93,74 @@ async function handleUpdate(update, env) {
       return;
     }
 
-    if (userText === "/cancel") {
-      const tierData = await env.SITES.get(`tier_${chatId}`, "json");
-      if (tierData) {
-        await env.SITES.delete(`tier_${chatId}`);
-        const userSite = await env.SITES.get(`user_${chatId}`, "json");
-        if (userSite && userSite.siteId) {
-          await sendMessage(env.TELEGRAM_TOKEN, chatId,
-            `✅ Cancelled. You're back to your previous site.\n\n` +
-            `You can now send changes to it, or reply *starter*, *business*, or *complex* to start a new order.`
-          );
-        } else {
-          await sendMessage(env.TELEGRAM_TOKEN, chatId,
-            `✅ Cancelled.\n\nReply *starter*, *business*, or *complex* to start a new order.`
-          );
-        }
-      } else {
+    if (userText === "/newsite") {
+      await sendMessage(env.TELEGRAM_TOKEN, chatId,
+        `➕ *New Website*\n\n` +
+        `Choose your plan:\n\n` +
+        `🟢 *Starter* — ₦50,000\n` +
+        `One-page landing site.\n\n` +
+        `🔵 *Business* — ₦85,000\n` +
+        `3-5 pages, contact forms, basic SEO.\n\n` +
+        `🟣 *Complex* — ₦180,000\n` +
+        `E-commerce, booking, blog, custom domain.\n\n` +
+        `Reply with *starter*, *business*, or *complex*.\n\n` +
+        `_Changed your mind? Reply /cancel_`
+      );
+      return;
+    }
+
+    if (userText === "/mysites") {
+      await handleMySites(chatId, env);
+      return;
+    }
+
+    if (userText.startsWith("/switch")) {
+      const parts = userText.split(" ");
+      const index = parts[1];
+      if (!index) {
         await sendMessage(env.TELEGRAM_TOKEN, chatId,
-          `Nothing to cancel. Reply *starter*, *business*, or *complex* to start a new order.`
+          `Usage: /switch 1\n\nUse /mysites to see your site list.`
         );
+        return;
       }
+      await handleSwitch(chatId, parseInt(index), env);
+      return;
+    }
+
+    if (userText.startsWith("/delete")) {
+      const parts = userText.split(" ");
+      const index = parts[1];
+      if (!index) {
+        await sendMessage(env.TELEGRAM_TOKEN, chatId,
+          `Usage: /delete 1\n\nUse /mysites to see your site list.`
+        );
+        return;
+      }
+      await handleDelete(chatId, parseInt(index), env);
+      return;
+    }
+
+    if (userText === "/cancel") {
+      await handleCancel(chatId, env);
       return;
     }
 
     if (userText === "/pay_tweak") {
-      const userSite = await env.SITES.get(`user_${chatId}`, "json");
-      if (!userSite) {
-        await sendMessage(env.TELEGRAM_TOKEN, chatId, "No active site found. Reply /support if you need help.");
-        return;
-      }
-
-      const paystackData = await initPaystack(chatId, 3000, env.PAYSTACK_SECRET_KEY, null, "tweak");
-      if (paystackData && paystackData.authorization_url) {
-        await sendMessage(env.TELEGRAM_TOKEN, chatId,
-          `💳 *Pay ₦3,000 to unlock 5 more edits:*\n\n${paystackData.authorization_url}`
-        );
-      } else {
-        await sendMessage(env.TELEGRAM_TOKEN, chatId, "❌ Payment setup failed. Reply /support if this keeps happening.");
-      }
+      await handlePayTweak(chatId, env);
       return;
     }
 
-    // FIRST: check if this is a tier selection (new site order)
-    const lower = userText.toLowerCase();
+    // === TIER SELECTION ===
     let tier = null;
     let price = 0;
-    if (lower.includes("starter")) { tier = "Starter"; price = 50000; }
-    else if (lower.includes("business")) { tier = "Business"; price = 85000; }
-    else if (lower.includes("complex")) { tier = "Complex"; price = 180000; }
+    if (lower === "starter" || lower.includes("starter")) { tier = "Starter"; price = 50000; }
+    else if (lower === "business" || lower.includes("business")) { tier = "Business"; price = 85000; }
+    else if (lower === "complex" || lower.includes("complex")) { tier = "Complex"; price = 180000; }
 
     if (tier) {
+      // Clear any pending job cleanup
+      await clearPendingJobs(chatId, env);
+
       await env.SITES.put(`tier_${chatId}`, JSON.stringify({ tier, price }));
       await sendMessage(env.TELEGRAM_TOKEN, chatId,
         `✅ *${tier} plan* selected — ₦${price.toLocaleString()}\n\n` +
@@ -163,7 +171,7 @@ async function handleUpdate(update, env) {
       return;
     }
 
-    // SECOND: check if we're waiting for a site description
+    // === WAITING FOR DESCRIPTION ===
     const tierData = await env.SITES.get(`tier_${chatId}`, "json");
     if (tierData) {
       const jobId = generateId();
@@ -185,16 +193,20 @@ async function handleUpdate(update, env) {
       return;
     }
 
-    // THIRD: if user has an active site, treat as tweak
-    const userSite = await env.SITES.get(`user_${chatId}`, "json");
-    if (userSite && userSite.siteId) {
-      await handleTweakRequest(chatId, userText, userSite, env);
-      return;
+    // === TWEAK REQUEST ===
+    const activeId = await env.SITES.get(`active_${chatId}`);
+    if (activeId) {
+      const sites = await env.SITES.get(`sites_${chatId}`, "json") || [];
+      const site = sites.find(s => s.siteId === activeId);
+      if (site) {
+        await handleTweakRequest(chatId, userText, site, env);
+        return;
+      }
     }
 
-    // Fallback
+    // === FALLBACK ===
     await sendMessage(env.TELEGRAM_TOKEN, chatId,
-      "Please pick a plan first: *starter*, *business*, or *complex*.\n\n" +
+      "Reply /start to see the menu.\n\n" +
       "💬 Need help? Reply /support"
     );
 
@@ -203,11 +215,119 @@ async function handleUpdate(update, env) {
   }
 }
 
-async function handleTweakRequest(chatId, userText, userSite, env) {
-  try {
-    const { siteId, tweaksUsed, tweaksLimit } = userSite;
+async function sendStartMessage(chatId, env) {
+  await sendMessage(env.TELEGRAM_TOKEN, chatId,
+    "👋 Welcome to *WebPanda*!\n\n" +
+    "I build professional websites for you in seconds.\n\n" +
+    "*Commands:*\n" +
+    "➕ /newsite — Build a new website\n" +
+    "🌐 /mysites — View and manage your websites\n" +
+    "💬 /support — Get help\n" +
+    "🔗 /domain — Get a custom domain\n\n" +
+    "📜 [Terms and Conditions](https://github.com/B0bbybr0wnn/Website-bot/blob/main/terms.md)"
+  );
+}
 
-    if (tweaksUsed >= tweaksLimit) {
+async function handleMySites(chatId, env) {
+  const sites = await env.SITES.get(`sites_${chatId}`, "json") || [];
+
+  if (sites.length === 0) {
+    await sendMessage(env.TELEGRAM_TOKEN, chatId,
+      "You don't have any websites yet.\n\n" +
+      "Reply /newsite to build one."
+    );
+    return;
+  }
+
+  const activeId = await env.SITES.get(`active_${chatId}`);
+  const baseUrl = "https://website-bot.bobbyjohon8585.workers.dev";
+
+  let list = "🌐 *Your Websites:*\n\n";
+  sites.forEach((s, i) => {
+    const isActive = s.siteId === activeId ? " ⬅️ active" : "";
+    const remaining = s.tweaksLimit - s.tweaksUsed;
+    list += `*${i + 1}.* ${s.name} (${s.tier})${isActive}\n`;
+    list += `   🔗 ${baseUrl}/site/${s.siteId}\n`;
+    list += `   ✏️ ${remaining} edits remaining\n\n`;
+  });
+
+  list += "*Commands:*\n";
+  list += "`/switch N` — Switch to site N for editing\n";
+  list += "`/delete N` — Delete site N\n";
+
+  await sendMessage(env.TELEGRAM_TOKEN, chatId, list);
+}
+
+async function handleSwitch(chatId, index, env) {
+  const sites = await env.SITES.get(`sites_${chatId}`, "json") || [];
+  if (index < 1 || index > sites.length) {
+    await sendMessage(env.TELEGRAM_TOKEN, chatId, "Invalid number. Use /mysites to see the list.");
+    return;
+  }
+
+  const site = sites[index - 1];
+  await env.SITES.put(`active_${chatId}`, site.siteId);
+
+  const remaining = site.tweaksLimit - site.tweaksUsed;
+  await sendMessage(env.TELEGRAM_TOKEN, chatId,
+    `✅ Now editing: *${site.name}*\n\n` +
+    `You have ${remaining} edits remaining.\n\n` +
+    `Just describe any changes you want.`
+  );
+}
+
+async function handleDelete(chatId, index, env) {
+  const sites = await env.SITES.get(`sites_${chatId}`, "json") || [];
+  if (index < 1 || index > sites.length) {
+    await sendMessage(env.TELEGRAM_TOKEN, chatId, "Invalid number. Use /mysites to see the list.");
+    return;
+  }
+
+  const site = sites[index - 1];
+  sites.splice(index - 1, 1);
+  await env.SITES.put(`sites_${chatId}`, JSON.stringify(sites));
+  await env.SITES.delete(`site_${site.siteId}`);
+
+  const activeId = await env.SITES.get(`active_${chatId}`);
+  if (activeId === site.siteId) {
+    await env.SITES.delete(`active_${chatId}`);
+  }
+
+  await sendMessage(env.TELEGRAM_TOKEN, chatId,
+    `🗑️ Deleted: *${site.name}*`
+  );
+}
+
+async function handleCancel(chatId, env) {
+  const tierData = await env.SITES.get(`tier_${chatId}`, "json");
+  if (tierData) {
+    await env.SITES.delete(`tier_${chatId}`);
+    await sendMessage(env.TELEGRAM_TOKEN, chatId, `✅ Cancelled.\n\nReply /newsite to start a new order.`);
+  } else {
+    await sendMessage(env.TELEGRAM_TOKEN, chatId, `Nothing to cancel.`);
+  }
+}
+
+async function handlePayTweak(chatId, env) {
+  const activeId = await env.SITES.get(`active_${chatId}`);
+  if (!activeId) {
+    await sendMessage(env.TELEGRAM_TOKEN, chatId, "No active site. Use /mysites to pick one, or /support for help.");
+    return;
+  }
+
+  const paystackData = await initPaystack(chatId, 3000, env.PAYSTACK_SECRET_KEY, null, "tweak");
+  if (paystackData && paystackData.authorization_url) {
+    await sendMessage(env.TELEGRAM_TOKEN, chatId,
+      `💳 *Pay ₦3,000 to unlock 5 more edits:*\n\n${paystackData.authorization_url}`
+    );
+  } else {
+    await sendMessage(env.TELEGRAM_TOKEN, chatId, "❌ Payment setup failed. Reply /support if this keeps happening.");
+  }
+}
+
+async function handleTweakRequest(chatId, userText, site, env) {
+  try {
+    if (site.tweaksUsed >= site.tweaksLimit) {
       await sendMessage(env.TELEGRAM_TOKEN, chatId,
         `🔒 *You've used all your edits for this site.*\n\n` +
         `Want to make more changes? Pay *₦3,000* to unlock *5 more edits*.\n\n` +
@@ -226,7 +346,7 @@ async function handleTweakRequest(chatId, userText, userSite, env) {
       jobId: jobId,
       chatId: chatId,
       userText: userText,
-      siteId: siteId,
+      siteId: site.siteId,
       isTweak: true,
       status: "pending",
       createdAt: Date.now()
@@ -234,6 +354,16 @@ async function handleTweakRequest(chatId, userText, userSite, env) {
 
   } catch (error) {
     console.error("handleTweakRequest error:", error.message, error.stack);
+  }
+}
+
+async function clearPendingJobs(chatId, env) {
+  const list = await env.SITES.list({ prefix: "job_" });
+  for (const key of list.keys) {
+    const job = await env.SITES.get(key.name, "json");
+    if (job && job.chatId === chatId && job.status === "pending") {
+      await env.SITES.delete(key.name);
+    }
   }
 }
 
@@ -275,13 +405,25 @@ async function processNewSiteJob(job, jobKey, env) {
   }
 
   const siteId = generateId();
-  await env.SITES.put(siteId, JSON.stringify({
+  const siteName = job.userText.substring(0, 30);
+
+  await env.SITES.put(`site_${siteId}`, JSON.stringify({
     html: websiteCode,
-    paid: false,
-    chatId: job.chatId,
-    tier: job.tier,
-    price: job.price
+    paid: false
   }));
+
+  // Add to user's sites list
+  const sites = await env.SITES.get(`sites_${job.chatId}`, "json") || [];
+  sites.push({
+    siteId: siteId,
+    tier: job.tier,
+    price: job.price,
+    name: siteName,
+    tweaksUsed: 0,
+    tweaksLimit: 0,
+    createdAt: Date.now()
+  });
+  await env.SITES.put(`sites_${job.chatId}`, JSON.stringify(sites));
 
   const baseUrl = "https://website-bot.bobbyjohon8585.workers.dev";
   const previewUrl = `${baseUrl}/site/${siteId}`;
@@ -310,7 +452,7 @@ async function processNewSiteJob(job, jobKey, env) {
 }
 
 async function processTweakJob(job, jobKey, env) {
-  const siteData = await env.SITES.get(job.siteId, "json");
+  const siteData = await env.SITES.get(`site_${job.siteId}`, "json");
   if (!siteData) {
     await env.SITES.delete(jobKey);
     return;
@@ -325,18 +467,18 @@ async function processTweakJob(job, jobKey, env) {
   }
 
   siteData.html = updatedHtml;
-  await env.SITES.put(job.siteId, JSON.stringify(siteData));
+  await env.SITES.put(`site_${job.siteId}`, JSON.stringify(siteData));
 
-  const userSite = await env.SITES.get(`user_${job.chatId}`, "json");
-  if (userSite) {
-    userSite.tweaksUsed = (userSite.tweaksUsed || 0) + 1;
-    await env.SITES.put(`user_${job.chatId}`, JSON.stringify(userSite));
+  const sites = await env.SITES.get(`sites_${job.chatId}`, "json") || [];
+  const site = sites.find(s => s.siteId === job.siteId);
+  if (site) {
+    site.tweaksUsed = (site.tweaksUsed || 0) + 1;
+    await env.SITES.put(`sites_${job.chatId}`, JSON.stringify(sites));
   }
 
   const baseUrl = "https://website-bot.bobbyjohon8585.workers.dev";
   const liveUrl = `${baseUrl}/site/${job.siteId}`;
-
-  const remaining = userSite ? (userSite.tweaksLimit - userSite.tweaksUsed) : 0;
+  const remaining = site ? (site.tweaksLimit - site.tweaksUsed) : 0;
 
   await sendMessage(env.TELEGRAM_TOKEN, job.chatId,
     `✅ *Changes applied!*\n\n` +
@@ -376,52 +518,53 @@ async function handlePaystackWebhook(request, env) {
       const siteId = metadata.siteId;
       const type = metadata.type;
 
-      if (!chatId) {
-        return new Response("OK", { status: 200 });
-      }
+      if (!chatId) return new Response("OK", { status: 200 });
 
       if (type === "tweak") {
-        const userSite = await env.SITES.get(`user_${chatId}`, "json");
-        if (userSite) {
-          userSite.tweaksLimit = (userSite.tweaksLimit || 3) + 5;
-          await env.SITES.put(`user_${chatId}`, JSON.stringify(userSite));
-
-          await sendMessage(env.TELEGRAM_TOKEN, chatId,
-            `🎉 *Payment confirmed!*\n\n` +
-            `You now have *5 more edits* unlocked.\n\n` +
-            `Just send your changes and I'll apply them.`
-          );
+        const activeId = await env.SITES.get(`active_${chatId}`);
+        if (activeId) {
+          const sites = await env.SITES.get(`sites_${chatId}`, "json") || [];
+          const site = sites.find(s => s.siteId === activeId);
+          if (site) {
+            site.tweaksLimit = (site.tweaksLimit || 0) + 5;
+            await env.SITES.put(`sites_${chatId}`, JSON.stringify(sites));
+          }
         }
+
+        await sendMessage(env.TELEGRAM_TOKEN, chatId,
+          `🎉 *Payment confirmed!*\n\nYou now have *5 more edits* unlocked.`
+        );
         return new Response("OK", { status: 200 });
       }
 
       if (siteId) {
-        const data = await env.SITES.get(siteId, "json");
-        if (data) {
-          data.paid = true;
-          await env.SITES.put(siteId, JSON.stringify(data));
-
-          await env.SITES.put(`user_${chatId}`, JSON.stringify({
-            siteId: siteId,
-            tweaksUsed: 0,
-            tweaksLimit: 3
-          }));
-
-          const baseUrl = "https://website-bot.bobbyjohon8585.workers.dev";
-          const liveUrl = `${baseUrl}/site/${siteId}`;
-
-          await sendMessage(env.TELEGRAM_TOKEN, chatId,
-            `🎉 *Payment confirmed!*\n\n` +
-            `Your website is now live:\n` +
-            `🔗 ${liveUrl}\n\n` +
-            `You can now request changes to your site — colors, text, phone number, anything. Just describe what you want changed and I'll apply it.\n\n` +
-            `💡 Want a professional web address like *yourbusiness.com.ng* instead of that long link?\n` +
-            `Reply /domain to learn more.\n\n` +
-            `—\n` +
-            `💬 Need help? Reply /support\n\n` +
-            `Thank you for using WebPanda!`
-          );
+        const siteData = await env.SITES.get(`site_${siteId}`, "json");
+        if (siteData) {
+          siteData.paid = true;
+          await env.SITES.put(`site_${siteId}`, JSON.stringify(siteData));
         }
+
+        const sites = await env.SITES.get(`sites_${chatId}`, "json") || [];
+        const site = sites.find(s => s.siteId === siteId);
+        if (site) {
+          site.tweaksUsed = 0;
+          site.tweaksLimit = 3;
+          await env.SITES.put(`sites_${chatId}`, JSON.stringify(sites));
+          await env.SITES.put(`active_${chatId}`, siteId);
+        }
+
+        const baseUrl = "https://website-bot.bobbyjohon8585.workers.dev";
+        const liveUrl = `${baseUrl}/site/${siteId}`;
+
+        await sendMessage(env.TELEGRAM_TOKEN, chatId,
+          `🎉 *Payment confirmed!*\n\n` +
+          `Your website is now live:\n` +
+          `🔗 ${liveUrl}\n\n` +
+          `You can now request changes — colors, text, phone number, anything.\n\n` +
+          `💡 Want a professional web address? Reply /domain\n\n` +
+          `—\n` +
+          `💬 Need help? Reply /support`
+        );
       }
     }
 
@@ -554,4 +697,4 @@ async function callGemini(url, prompt) {
     }
   }
   return "⏳ *WebPanda is busy right now.* Please try again in a minute.";
-    }
+          }
