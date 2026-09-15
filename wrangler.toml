@@ -4,4 +4,7 @@ compatibility_date = "2024-01-01"
 
 [[kv_namespaces]]
 binding = "SITES"
-id = "c04f73da254e4e0daf6b2c16b249c39f"
+id = "YOUR_KV_ID_HERE"
+
+[triggers]
+crons = ["* * * * *"]
