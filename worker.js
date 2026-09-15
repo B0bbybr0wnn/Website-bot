@@ -158,7 +158,6 @@ async function handleUpdate(update, env) {
     else if (lower === "complex" || lower.includes("complex")) { tier = "Complex"; price = 180000; }
 
     if (tier) {
-      // Clear any pending job cleanup
       await clearPendingJobs(chatId, env);
 
       await env.SITES.put(`tier_${chatId}`, JSON.stringify({ tier, price }));
@@ -243,13 +242,27 @@ async function handleMySites(chatId, env) {
   const baseUrl = "https://website-bot.bobbyjohon8585.workers.dev";
 
   let list = "🌐 *Your Websites:*\n\n";
-  sites.forEach((s, i) => {
+
+  for (let i = 0; i < sites.length; i++) {
+    const s = sites[i];
+
+    const siteData = await env.SITES.get(`site_${s.siteId}`, "json");
+    const isPaid = siteData && siteData.paid === true;
+
     const isActive = s.siteId === activeId ? " ⬅️ active" : "";
-    const remaining = s.tweaksLimit - s.tweaksUsed;
+
+    let status = "";
+    if (isPaid) {
+      const remaining = s.tweaksLimit - s.tweaksUsed;
+      status = `✅ Live — ${remaining} edit${remaining === 1 ? "" : "s"} remaining`;
+    } else {
+      status = `⏳ Preview (unpaid)`;
+    }
+
     list += `*${i + 1}.* ${s.name} (${s.tier})${isActive}\n`;
-    list += `   🔗 ${baseUrl}/site/${s.siteId}\n`;
-    list += `   ✏️ ${remaining} edits remaining\n\n`;
-  });
+    list += `   ${status}\n`;
+    list += `   🔗 ${baseUrl}/site/${s.siteId}\n\n`;
+  }
 
   list += "*Commands:*\n";
   list += "`/switch N` — Switch to site N for editing\n";
@@ -412,7 +425,6 @@ async function processNewSiteJob(job, jobKey, env) {
     paid: false
   }));
 
-  // Add to user's sites list
   const sites = await env.SITES.get(`sites_${job.chatId}`, "json") || [];
   sites.push({
     siteId: siteId,
