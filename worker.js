@@ -7,6 +7,11 @@ export default {
       return await handlePaystackWebhook(request, env);
     }
 
+    // Background processor — handles generation without waitUntil limits
+    if (url.pathname === "/process" && request.method === "POST") {
+      return await handleProcess(request, env);
+    }
+
     // Serve a site
     const siteMatch = url.pathname.match(/^\/site\/([a-zA-Z0-9]+)$/);
     if (siteMatch && request.method === "GET") {
@@ -25,7 +30,7 @@ export default {
       });
     }
 
-    // Telegram webhook — respond instantly, process in background
+    // Telegram webhook
     if (request.method !== "POST") {
       return new Response("Bot is running.", { status: 200 });
     }
@@ -37,7 +42,8 @@ export default {
       return new Response("OK", { status: 200 });
     }
 
-    ctx.waitUntil(handleUpdate(update, env));
+    // Handle simple commands instantly, defer the heavy stuff
+    await handleUpdate(update, env);
 
     return new Response("OK", { status: 200 });
   }
@@ -92,15 +98,43 @@ async function handleUpdate(update, env) {
       return;
     }
 
+    // Send "Generating..." now, then fire off the background process
     await sendMessage(env.TELEGRAM_TOKEN, chatId,
       "⏳ Generating your website... this takes less than 1 minute."
     );
 
-    const websiteCode = await generateWebsite(userText, tierData.tier, env.GEMINI_API_KEY);
+    // Fire off the process request (don't await — let it run independently)
+    const processUrl = "https://website-bot.bobbyjohon8585.workers.dev/process";
+    fetch(processUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chatId: chatId,
+        userText: userText,
+        tier: tierData.tier,
+        price: tierData.price
+      })
+    }).catch(err => console.error("Process fire error:", err.message));
+
+    // Clean up the tier
+    await env.SITES.delete(`tier_${chatId}`);
+
+  } catch (error) {
+    console.error("handleUpdate error:", error.message, error.stack);
+  }
+}
+
+async function handleProcess(request, env) {
+  try {
+    const job = await request.json();
+    const { chatId, userText, tier, price } = job;
+
+    // Generate the website
+    const websiteCode = await generateWebsite(userText, tier, env.GEMINI_API_KEY);
 
     if (websiteCode.startsWith("⏳")) {
       await sendMessage(env.TELEGRAM_TOKEN, chatId, websiteCode);
-      return;
+      return new Response("OK", { status: 200 });
     }
 
     const siteId = generateId();
@@ -108,8 +142,8 @@ async function handleUpdate(update, env) {
       html: websiteCode,
       paid: false,
       chatId: chatId,
-      tier: tierData.tier,
-      price: tierData.price
+      tier: tier,
+      price: price
     }));
 
     const baseUrl = "https://website-bot.bobbyjohon8585.workers.dev";
@@ -117,7 +151,7 @@ async function handleUpdate(update, env) {
 
     const paystackData = await initPaystack(
       chatId,
-      tierData.price,
+      price,
       env.PAYSTACK_SECRET_KEY,
       siteId
     );
@@ -126,22 +160,23 @@ async function handleUpdate(update, env) {
       await sendMessage(env.TELEGRAM_TOKEN, chatId,
         "❌ Payment setup failed. Please try again."
       );
-      return;
+      return new Response("OK", { status: 200 });
     }
 
     await sendMessage(env.TELEGRAM_TOKEN, chatId,
       `✅ *Preview ready!*\n\n` +
       `🔗 ${previewUrl}\n\n` +
       `_This is a preview with a watermark._\n\n` +
-      `💳 To unlock your full website, pay *₦${tierData.price.toLocaleString()}*:\n` +
+      `💳 To unlock your full website, pay *₦${price.toLocaleString()}*:\n` +
       `${paystackData.authorization_url}\n\n` +
       `Once payment is confirmed, your site will be unlocked automatically.`
     );
 
-    await env.SITES.delete(`tier_${chatId}`);
+    return new Response("OK", { status: 200 });
 
   } catch (error) {
-    console.error("handleUpdate error:", error.message, error.stack);
+    console.error("handleProcess error:", error.message, error.stack);
+    return new Response("Error", { status: 500 });
   }
 }
 
@@ -150,7 +185,6 @@ async function handlePaystackWebhook(request, env) {
     const rawBody = await request.text();
     const body = JSON.parse(rawBody);
 
-    // Verify signature using Web Crypto API (Workers-compatible)
     const encoder = new TextEncoder();
     const keyData = encoder.encode(env.PAYSTACK_SECRET_KEY);
     const messageData = encoder.encode(rawBody);
@@ -305,4 +339,4 @@ Make it modern, responsive, and beautiful.`;
   }
 
   return "⏳ *WebPanda is busy right now.*\n\nOur servers are handling a lot of requests at the moment. Please try again in a minute.";
-        }
+                           }
