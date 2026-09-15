@@ -7,11 +7,6 @@ export default {
       return await handlePaystackWebhook(request, env);
     }
 
-    // Background processor — handles generation without waitUntil limits
-    if (url.pathname === "/process" && request.method === "POST") {
-      return await handleProcess(request, env);
-    }
-
     // Serve a site
     const siteMatch = url.pathname.match(/^\/site\/([a-zA-Z0-9]+)$/);
     if (siteMatch && request.method === "GET") {
@@ -42,10 +37,13 @@ export default {
       return new Response("OK", { status: 200 });
     }
 
-    // Handle simple commands instantly, defer the heavy stuff
     await handleUpdate(update, env);
-
     return new Response("OK", { status: 200 });
+  },
+
+  // Cron trigger handler — runs every minute
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(processPendingJobs(env));
   }
 };
 
@@ -98,25 +96,22 @@ async function handleUpdate(update, env) {
       return;
     }
 
-    // Send "Generating..." now, then fire off the background process
+    // Save job to KV as pending
+    const jobId = generateId();
+    await env.SITES.put(`job_${jobId}`, JSON.stringify({
+      jobId: jobId,
+      chatId: chatId,
+      userText: userText,
+      tier: tierData.tier,
+      price: tierData.price,
+      status: "pending",
+      createdAt: Date.now()
+    }));
+
     await sendMessage(env.TELEGRAM_TOKEN, chatId,
-      "⏳ Generating your website... this takes less than 1 minute."
+      "⏳ Generating your website... this takes up to 1 minute."
     );
 
-    // Fire off the process request (don't await — let it run independently)
-    const processUrl = "https://website-bot.bobbyjohon8585.workers.dev/process";
-    fetch(processUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chatId: chatId,
-        userText: userText,
-        tier: tierData.tier,
-        price: tierData.price
-      })
-    }).catch(err => console.error("Process fire error:", err.message));
-
-    // Clean up the tier
     await env.SITES.delete(`tier_${chatId}`);
 
   } catch (error) {
@@ -124,59 +119,77 @@ async function handleUpdate(update, env) {
   }
 }
 
-async function handleProcess(request, env) {
+// Called by cron every minute
+async function processPendingJobs(env) {
   try {
-    const job = await request.json();
-    const { chatId, userText, tier, price } = job;
+    // List all keys, look for job_*
+    const list = await env.SITES.list({ prefix: "job_" });
 
-    // Generate the website
-    const websiteCode = await generateWebsite(userText, tier, env.GEMINI_API_KEY);
+    for (const key of list.keys) {
+      const job = await env.SITES.get(key.name, "json");
+      if (!job || job.status !== "pending") continue;
 
-    if (websiteCode.startsWith("⏳")) {
-      await sendMessage(env.TELEGRAM_TOKEN, chatId, websiteCode);
-      return new Response("OK", { status: 200 });
+      // Mark as processing so we don't double-process
+      job.status = "processing";
+      await env.SITES.put(key.name, JSON.stringify(job));
+
+      try {
+        const websiteCode = await generateWebsite(job.userText, job.tier, env.GEMINI_API_KEY);
+
+        if (websiteCode.startsWith("⏳")) {
+          // AI busy, reset to pending and try again next minute
+          job.status = "pending";
+          await env.SITES.put(key.name, JSON.stringify(job));
+          continue;
+        }
+
+        const siteId = generateId();
+        await env.SITES.put(siteId, JSON.stringify({
+          html: websiteCode,
+          paid: false,
+          chatId: job.chatId,
+          tier: job.tier,
+          price: job.price
+        }));
+
+        const baseUrl = "https://website-bot.bobbyjohon8585.workers.dev";
+        const previewUrl = `${baseUrl}/site/${siteId}`;
+
+        const paystackData = await initPaystack(
+          job.chatId,
+          job.price,
+          env.PAYSTACK_SECRET_KEY,
+          siteId
+        );
+
+        if (!paystackData || !paystackData.authorization_url) {
+          await sendMessage(env.TELEGRAM_TOKEN, job.chatId,
+            "❌ Payment setup failed. Please try again."
+          );
+          await env.SITES.delete(key.name);
+          continue;
+        }
+
+        await sendMessage(env.TELEGRAM_TOKEN, job.chatId,
+          `✅ *Preview ready!*\n\n` +
+          `🔗 ${previewUrl}\n\n` +
+          `_This is a preview with a watermark._\n\n` +
+          `💳 To unlock your full website, pay *₦${job.price.toLocaleString()}*:\n` +
+          `${paystackData.authorization_url}\n\n` +
+          `Once payment is confirmed, your site will be unlocked automatically.`
+        );
+
+        // Delete the job
+        await env.SITES.delete(key.name);
+
+      } catch (err) {
+        console.error("Job process error:", err.message);
+        job.status = "pending";
+        await env.SITES.put(key.name, JSON.stringify(job));
+      }
     }
-
-    const siteId = generateId();
-    await env.SITES.put(siteId, JSON.stringify({
-      html: websiteCode,
-      paid: false,
-      chatId: chatId,
-      tier: tier,
-      price: price
-    }));
-
-    const baseUrl = "https://website-bot.bobbyjohon8585.workers.dev";
-    const previewUrl = `${baseUrl}/site/${siteId}`;
-
-    const paystackData = await initPaystack(
-      chatId,
-      price,
-      env.PAYSTACK_SECRET_KEY,
-      siteId
-    );
-
-    if (!paystackData || !paystackData.authorization_url) {
-      await sendMessage(env.TELEGRAM_TOKEN, chatId,
-        "❌ Payment setup failed. Please try again."
-      );
-      return new Response("OK", { status: 200 });
-    }
-
-    await sendMessage(env.TELEGRAM_TOKEN, chatId,
-      `✅ *Preview ready!*\n\n` +
-      `🔗 ${previewUrl}\n\n` +
-      `_This is a preview with a watermark._\n\n` +
-      `💳 To unlock your full website, pay *₦${price.toLocaleString()}*:\n` +
-      `${paystackData.authorization_url}\n\n` +
-      `Once payment is confirmed, your site will be unlocked automatically.`
-    );
-
-    return new Response("OK", { status: 200 });
-
-  } catch (error) {
-    console.error("handleProcess error:", error.message, error.stack);
-    return new Response("Error", { status: 500 });
+  } catch (err) {
+    console.error("processPendingJobs error:", err.message);
   }
 }
 
@@ -302,7 +315,7 @@ async function generateWebsite(userPrompt, tier, apiKey) {
 Return ONLY the complete HTML file with inline CSS and JavaScript. No explanations, no markdown, no code fences, just the raw HTML code starting with <!DOCTYPE html>.
 Make it modern, responsive, and beautiful.`;
 
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const response = await fetch(url, {
         method: "POST",
@@ -339,4 +352,4 @@ Make it modern, responsive, and beautiful.`;
   }
 
   return "⏳ *WebPanda is busy right now.*\n\nOur servers are handling a lot of requests at the moment. Please try again in a minute.";
-                           }
+      }
