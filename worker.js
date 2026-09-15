@@ -25,129 +25,140 @@ export default {
       });
     }
 
-    // Telegram webhook
+    // Telegram webhook — respond instantly, process in background
     if (request.method !== "POST") {
       return new Response("Bot is running.", { status: 200 });
     }
 
+    let update;
     try {
-      const update = await request.json();
-
-      if (update.message && update.message.text) {
-        const chatId = update.message.chat.id;
-        const userText = update.message.text;
-
-        if (userText === "/start") {
-          await sendMessage(env.TELEGRAM_TOKEN, chatId,
-            "👋 Welcome to *WebPanda*!\n\n" +
-            "I build professional websites for you in seconds.\n\n" +
-            "Choose your plan:\n\n" +
-            "🟢 *Starter* — ₦50,000\n" +
-            "One-page landing site with basic features.\n\n" +
-            "🔵 *Business* — ₦85,000\n" +
-            "3-5 pages, contact forms, basic SEO.\n\n" +
-            "🟣 *Complex* — ₦180,000\n" +
-            "E-commerce, booking, blog, custom domain.\n\n" +
-            "Reply with *starter*, *business*, or *complex* to continue.\n\n" +
-            "📜 [Terms and Conditions](https://github.com/B0bbybr0wnn/Website-bot/blob/main/terms.md)"
-          );
-          return new Response("OK", { status: 200 });
-        }
-
-        const lower = userText.toLowerCase();
-        let tier = null;
-        let price = 0;
-        if (lower.includes("starter")) { tier = "Starter"; price = 50000; }
-        else if (lower.includes("business")) { tier = "Business"; price = 85000; }
-        else if (lower.includes("complex")) { tier = "Complex"; price = 180000; }
-
-        if (tier) {
-          await env.SITES.put(`tier_${chatId}`, JSON.stringify({ tier, price }));
-          await sendMessage(env.TELEGRAM_TOKEN, chatId,
-            `✅ *${tier} plan* selected — ₦${price.toLocaleString()}\n\n` +
-            "Now describe your website. For example:\n" +
-            "\"A bakery website with a menu and contact form\""
-          );
-          return new Response("OK", { status: 200 });
-        }
-
-        const tierData = await env.SITES.get(`tier_${chatId}`, "json");
-        if (!tierData) {
-          await sendMessage(env.TELEGRAM_TOKEN, chatId,
-            "Please pick a plan first: *starter*, *business*, or *complex*."
-          );
-          return new Response("OK", { status: 200 });
-        }
-
-        await sendMessage(env.TELEGRAM_TOKEN, chatId,
-          "⏳ Generating your website... this takes about 30 seconds."
-        );
-
-        const websiteCode = await generateWebsite(userText, tierData.tier, env.GEMINI_API_KEY);
-
-        if (websiteCode.startsWith("Sorry")) {
-          await sendMessage(env.TELEGRAM_TOKEN, chatId, websiteCode);
-          return new Response("OK", { status: 200 });
-        }
-
-        const siteId = generateId();
-        await env.SITES.put(siteId, JSON.stringify({
-          html: websiteCode,
-          paid: false,
-          chatId: chatId,
-          tier: tierData.tier,
-          price: tierData.price
-        }));
-
-        const baseUrl = "https://website-bot.bobbyjohon8585.workers.dev";
-        const previewUrl = `${baseUrl}/site/${siteId}`;
-
-        const paystackData = await initPaystack(
-          chatId,
-          tierData.price,
-          env.PAYSTACK_SECRET_KEY,
-          previewUrl
-        );
-
-        if (!paystackData || !paystackData.authorization_url) {
-          await sendMessage(env.TELEGRAM_TOKEN, chatId,
-            "❌ Payment setup failed. Please try again."
-          );
-          return new Response("OK", { status: 200 });
-        }
-
-        await sendMessage(env.TELEGRAM_TOKEN, chatId,
-          `✅ *Preview ready!*\n\n` +
-          `🔗 ${previewUrl}\n\n` +
-          `_This is a preview with a watermark._\n\n` +
-          `💳 To unlock your full website, pay *₦${tierData.price.toLocaleString()}*:\n` +
-          `${paystackData.authorization_url}\n\n` +
-          `Once payment is confirmed, your site will be unlocked automatically.`
-        );
-
-        await env.SITES.delete(`tier_${chatId}`);
-      }
-
+      update = await request.json();
+    } catch (e) {
       return new Response("OK", { status: 200 });
-
-    } catch (error) {
-      console.error("Error:", error);
-      return new Response("Error", { status: 500 });
     }
+
+    // Process in background so Telegram doesn't retry
+    ctx.waitUntil(handleUpdate(update, env));
+
+    return new Response("OK", { status: 200 });
   }
 };
 
+async function handleUpdate(update, env) {
+  try {
+    if (!update.message || !update.message.text) return;
+
+    const chatId = update.message.chat.id;
+    const userText = update.message.text;
+
+    if (userText === "/start") {
+      await sendMessage(env.TELEGRAM_TOKEN, chatId,
+        "👋 Welcome to *WebPanda*!\n\n" +
+        "I build professional websites for you in seconds.\n\n" +
+        "Choose your plan:\n\n" +
+        "🟢 *Starter* — ₦50,000\n" +
+        "One-page landing site with basic features.\n\n" +
+        "🔵 *Business* — ₦85,000\n" +
+        "3-5 pages, contact forms, basic SEO.\n\n" +
+        "🟣 *Complex* — ₦180,000\n" +
+        "E-commerce, booking, blog, custom domain.\n\n" +
+        "Reply with *starter*, *business*, or *complex* to continue.\n\n" +
+        "📜 [Terms and Conditions](https://github.com/B0bbybr0wnn/Website-bot/blob/main/terms.md)"
+      );
+      return;
+    }
+
+    const lower = userText.toLowerCase();
+    let tier = null;
+    let price = 0;
+    if (lower.includes("starter")) { tier = "Starter"; price = 50000; }
+    else if (lower.includes("business")) { tier = "Business"; price = 85000; }
+    else if (lower.includes("complex")) { tier = "Complex"; price = 180000; }
+
+    if (tier) {
+      await env.SITES.put(`tier_${chatId}`, JSON.stringify({ tier, price }));
+      await sendMessage(env.TELEGRAM_TOKEN, chatId,
+        `✅ *${tier} plan* selected — ₦${price.toLocaleString()}\n\n` +
+        "Now describe your website. For example:\n" +
+        "\"A bakery website with a menu and contact form\""
+      );
+      return;
+    }
+
+    const tierData = await env.SITES.get(`tier_${chatId}`, "json");
+    if (!tierData) {
+      await sendMessage(env.TELEGRAM_TOKEN, chatId,
+        "Please pick a plan first: *starter*, *business*, or *complex*."
+      );
+      return;
+    }
+
+    await sendMessage(env.TELEGRAM_TOKEN, chatId,
+      "⏳ Generating your website... this takes less than 1 minute."
+    );
+
+    const websiteCode = await generateWebsite(userText, tierData.tier, env.GEMINI_API_KEY);
+
+    if (websiteCode.startsWith("⏳")) {
+      await sendMessage(env.TELEGRAM_TOKEN, chatId, websiteCode);
+      return;
+    }
+
+    const siteId = generateId();
+    await env.SITES.put(siteId, JSON.stringify({
+      html: websiteCode,
+      paid: false,
+      chatId: chatId,
+      tier: tierData.tier,
+      price: tierData.price
+    }));
+
+    const baseUrl = "https://website-bot.bobbyjohon8585.workers.dev";
+    const previewUrl = `${baseUrl}/site/${siteId}`;
+
+    const paystackData = await initPaystack(
+      chatId,
+      tierData.price,
+      env.PAYSTACK_SECRET_KEY,
+      siteId
+    );
+
+    if (!paystackData || !paystackData.authorization_url) {
+      await sendMessage(env.TELEGRAM_TOKEN, chatId,
+        "❌ Payment setup failed. Please try again."
+      );
+      return;
+    }
+
+    await sendMessage(env.TELEGRAM_TOKEN, chatId,
+      `✅ *Preview ready!*\n\n` +
+      `🔗 ${previewUrl}\n\n` +
+      `_This is a preview with a watermark._\n\n` +
+      `💳 To unlock your full website, pay *₦${tierData.price.toLocaleString()}*:\n` +
+      `${paystackData.authorization_url}\n\n` +
+      `Once payment is confirmed, your site will be unlocked automatically.`
+    );
+
+    await env.SITES.delete(`tier_${chatId}`);
+
+  } catch (error) {
+    console.error("handleUpdate error:", error);
+  }
+}
+
 async function handlePaystackWebhook(request, env) {
   try {
-    const body = await request.json();
+    const rawBody = await request.text();
+    const body = JSON.parse(rawBody);
 
     const crypto = await import("crypto");
     const hash = crypto.createHmac("sha512", env.PAYSTACK_SECRET_KEY)
-      .update(JSON.stringify(body))
+      .update(rawBody)
       .digest("hex");
 
     const signature = request.headers.get("x-paystack-signature");
     if (hash !== signature) {
+      console.error("Invalid webhook signature");
       return new Response("Invalid signature", { status: 401 });
     }
 
@@ -183,7 +194,7 @@ async function handlePaystackWebhook(request, env) {
   }
 }
 
-async function initPaystack(chatId, amount, secretKey, siteUrl) {
+async function initPaystack(chatId, amount, secretKey, siteId) {
   try {
     const response = await fetch("https://api.paystack.co/transaction/initialize", {
       method: "POST",
@@ -195,10 +206,9 @@ async function initPaystack(chatId, amount, secretKey, siteUrl) {
         email: `user${chatId}@webpanda.app`,
         amount: amount * 100,
         currency: "NGN",
-        callback_url: siteUrl,
         metadata: {
           chatId: chatId,
-          siteId: siteUrl.split("/site/")[1]
+          siteId: siteId
         }
       })
     });
@@ -247,18 +257,13 @@ async function generateWebsite(userPrompt, tier, apiKey) {
 Return ONLY the complete HTML file with inline CSS and JavaScript. No explanations, no markdown, no code fences, just the raw HTML code starting with <!DOCTYPE html>.
 Make it modern, responsive, and beautiful.`;
 
-  // Retry up to 3 times if the AI service is busy
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contents: [{
-            parts: [{
-              text: systemPrompt + "\n\nUser request: " + userPrompt
-            }]
-          }],
+          contents: [{ parts: [{ text: systemPrompt + "\n\nUser request: " + userPrompt }] }],
           safetySettings: [
             { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
             { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -276,20 +281,17 @@ Make it modern, responsive, and beautiful.`;
         return code;
       }
 
-      // If server is busy (503), wait and retry
       if (data.error && (data.error.code === 503 || data.error.code === 500)) {
-        await new Promise(r => setTimeout(r, 3000));
+        await new Promise(r => setTimeout(r, 2000));
         continue;
       }
 
-      // Any other error, stop retrying
       break;
-
     } catch (err) {
-      await new Promise(r => setTimeout(r, 3000));
+      await new Promise(r => setTimeout(r, 2000));
       continue;
     }
   }
 
   return "⏳ *WebPanda is busy right now.*\n\nOur servers are handling a lot of requests at the moment. Please try again in a minute.";
-  }
+    }
