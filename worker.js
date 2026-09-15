@@ -67,11 +67,48 @@ async function handleUpdate(update, env) {
       return;
     }
 
+    if (userText === "/domain") {
+      await sendMessage(env.TELEGRAM_TOKEN, chatId,
+        `🌐 *Custom Domain*\n\n` +
+        `Want your own professional web address instead of the long link?\n\n` +
+        `🟢 *.com.ng* — ₦20,000/year\n` +
+        `_Example: yourbusiness.com.ng_\n\n` +
+        `🔵 *.com* — ₦35,000/year\n` +
+        `_Example: yourbusiness.com_\n\n` +
+        `Both include:\n` +
+        `• Domain registration\n` +
+        `• Connected to your site\n` +
+        `• Free SSL certificate\n` +
+        `• 1 year of hosting\n\n` +
+        `*To order*, message me directly:\n` +
+        `👉 [Chat with me](https://t.me/B0bb_y)\n\n` +
+        `Send me the domain name you want and I'll set it up.`
+      );
+      return;
+    }
+
+    if (userText === "/pay_tweak") {
+      const userSite = await env.SITES.get(`user_${chatId}`, "json");
+      if (!userSite) {
+        await sendMessage(env.TELEGRAM_TOKEN, chatId, "No active site found.");
+        return;
+      }
+
+      const paystackData = await initPaystack(chatId, 3000, env.PAYSTACK_SECRET_KEY, null, "tweak");
+      if (paystackData && paystackData.authorization_url) {
+        await sendMessage(env.TELEGRAM_TOKEN, chatId,
+          `💳 *Pay ₦3,000 to unlock 5 more edits:*\n\n${paystackData.authorization_url}`
+        );
+      } else {
+        await sendMessage(env.TELEGRAM_TOKEN, chatId, "❌ Payment setup failed. Please try again.");
+      }
+      return;
+    }
+
     // Check if user has an active site (tweak mode)
     const userSite = await env.SITES.get(`user_${chatId}`, "json");
 
     if (userSite && userSite.siteId) {
-      // User has a site — treat this message as a tweak request
       await handleTweakRequest(chatId, userText, userSite, env);
       return;
     }
@@ -128,12 +165,10 @@ async function handleTweakRequest(chatId, userText, userSite, env) {
   try {
     const { siteId, tweaksUsed, tweaksLimit } = userSite;
 
-    // Check if they've used all their tweaks
     if (tweaksUsed >= tweaksLimit) {
       await sendMessage(env.TELEGRAM_TOKEN, chatId,
-        `🔒 *You've used all your free edits.*\n\n` +
-        `You've used ${tweaksUsed} edits on this site.\n\n` +
-        `Want more? Pay *₦3,000* to unlock *5 more edits*.\n\n` +
+        `🔒 *You've used all your edits for this site.*\n\n` +
+        `Want to make more changes? Pay *₦3,000* to unlock *5 more edits*.\n\n` +
         `Reply */pay_tweak* to continue.`
       );
       return;
@@ -143,7 +178,6 @@ async function handleTweakRequest(chatId, userText, userSite, env) {
       "⏳ Applying your changes... this takes up to 1 minute."
     );
 
-    // Save tweak job
     const jobId = generateId();
     await env.SITES.put(`job_${jobId}`, JSON.stringify({
       jobId: jobId,
@@ -249,7 +283,6 @@ async function processTweakJob(job, jobKey, env) {
   siteData.html = updatedHtml;
   await env.SITES.put(job.siteId, JSON.stringify(siteData));
 
-  // Increment tweaks used
   const userSite = await env.SITES.get(`user_${job.chatId}`, "json");
   if (userSite) {
     userSite.tweaksUsed = (userSite.tweaksUsed || 0) + 1;
@@ -264,7 +297,7 @@ async function processTweakJob(job, jobKey, env) {
   await sendMessage(env.TELEGRAM_TOKEN, job.chatId,
     `✅ *Changes applied!*\n\n` +
     `🔗 ${liveUrl}\n\n` +
-    `_You have ${remaining} free edit${remaining === 1 ? "" : "s"} remaining._`
+    `_You have ${remaining} edit${remaining === 1 ? "" : "s"} remaining._`
   );
 
   await env.SITES.delete(jobKey);
@@ -303,7 +336,6 @@ async function handlePaystackWebhook(request, env) {
         return new Response("OK", { status: 200 });
       }
 
-      // Handle tweak payment
       if (type === "tweak") {
         const userSite = await env.SITES.get(`user_${chatId}`, "json");
         if (userSite) {
@@ -319,14 +351,12 @@ async function handlePaystackWebhook(request, env) {
         return new Response("OK", { status: 200 });
       }
 
-      // Handle site payment
       if (siteId) {
         const data = await env.SITES.get(siteId, "json");
         if (data) {
           data.paid = true;
           await env.SITES.put(siteId, JSON.stringify(data));
 
-          // Register this user for tweaks
           await env.SITES.put(`user_${chatId}`, JSON.stringify({
             siteId: siteId,
             tweaksUsed: 0,
@@ -340,7 +370,9 @@ async function handlePaystackWebhook(request, env) {
             `🎉 *Payment confirmed!*\n\n` +
             `Your website is now live:\n` +
             `🔗 ${liveUrl}\n\n` +
-            `*You have 3 free edits.* Just describe any changes you want — colors, text, phone number, anything.\n\n` +
+            `You can now request changes to your site — colors, text, phone number, anything. Just describe what you want changed and I'll apply it.\n\n` +
+            `💡 Want a professional web address like *yourbusiness.com.ng* instead of that long link?\n` +
+            `Reply /domain to learn more.\n\n` +
             `Thank you for using WebPanda!`
           );
         }
@@ -476,4 +508,4 @@ async function callGemini(url, prompt) {
     }
   }
   return "⏳ *WebPanda is busy right now.* Please try again in a minute.";
-        }
+                                              }
