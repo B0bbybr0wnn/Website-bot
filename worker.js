@@ -16,7 +16,6 @@ export default {
 
       let html = data.html;
       if (!data.paid) {
-        // Inject a preview banner for unpaid sites
         const banner = `<div style="position:fixed;top:0;left:0;right:0;background:#ff6b00;color:white;padding:12px;text-align:center;font-family:sans-serif;font-weight:bold;z-index:99999;box-shadow:0 2px 8px rgba(0,0,0,0.2);">PREVIEW MODE — Pay to unlock your full website</div><div style="height:50px;"></div>`;
         html = html.replace(/<body([^>]*)>/i, `<body$1>${banner}`);
       }
@@ -55,7 +54,6 @@ export default {
           return new Response("OK", { status: 200 });
         }
 
-        // Detect tier
         const lower = userText.toLowerCase();
         let tier = null;
         let price = 0;
@@ -63,7 +61,6 @@ export default {
         else if (lower.includes("business")) { tier = "Business"; price = 85000; }
         else if (lower.includes("complex")) { tier = "Complex"; price = 180000; }
 
-        // If user picked a tier, wait for description
         if (tier) {
           await env.SITES.put(`tier_${chatId}`, JSON.stringify({ tier, price }));
           await sendMessage(env.TELEGRAM_TOKEN, chatId,
@@ -74,7 +71,6 @@ export default {
           return new Response("OK", { status: 200 });
         }
 
-        // Check if user has a tier selected
         const tierData = await env.SITES.get(`tier_${chatId}`, "json");
         if (!tierData) {
           await sendMessage(env.TELEGRAM_TOKEN, chatId,
@@ -83,7 +79,6 @@ export default {
           return new Response("OK", { status: 200 });
         }
 
-        // Generate the website
         await sendMessage(env.TELEGRAM_TOKEN, chatId,
           "⏳ Generating your website... this takes about 30 seconds."
         );
@@ -95,7 +90,6 @@ export default {
           return new Response("OK", { status: 200 });
         }
 
-        // Save site as unpaid
         const siteId = generateId();
         await env.SITES.put(siteId, JSON.stringify({
           html: websiteCode,
@@ -108,7 +102,6 @@ export default {
         const baseUrl = "https://website-bot.bobbyjohon8585.workers.dev";
         const previewUrl = `${baseUrl}/site/${siteId}`;
 
-        // Initialize Paystack transaction
         const paystackData = await initPaystack(
           chatId,
           tierData.price,
@@ -132,7 +125,6 @@ export default {
           `Once payment is confirmed, your site will be unlocked automatically.`
         );
 
-        // Clear the tier so user can order another site later
         await env.SITES.delete(`tier_${chatId}`);
       }
 
@@ -145,12 +137,10 @@ export default {
   }
 };
 
-// Handle Paystack webhook
 async function handlePaystackWebhook(request, env) {
   try {
     const body = await request.json();
 
-    // Verify signature
     const crypto = await import("crypto");
     const hash = crypto.createHmac("sha512", env.PAYSTACK_SECRET_KEY)
       .update(JSON.stringify(body))
@@ -161,7 +151,6 @@ async function handlePaystackWebhook(request, env) {
       return new Response("Invalid signature", { status: 401 });
     }
 
-    // Handle successful charge
     if (body.event === "charge.success") {
       const metadata = body.data.metadata;
       const siteId = metadata && metadata.siteId;
@@ -194,7 +183,6 @@ async function handlePaystackWebhook(request, env) {
   }
 }
 
-// Initialize Paystack transaction
 async function initPaystack(chatId, amount, secretKey, siteUrl) {
   try {
     const response = await fetch("https://api.paystack.co/transaction/initialize", {
@@ -205,7 +193,7 @@ async function initPaystack(chatId, amount, secretKey, siteUrl) {
       },
       body: JSON.stringify({
         email: `user${chatId}@webpanda.app`,
-        amount: amount * 100, // Paystack uses kobo
+        amount: amount * 100,
         currency: "NGN",
         callback_url: siteUrl,
         metadata: {
@@ -223,7 +211,6 @@ async function initPaystack(chatId, amount, secretKey, siteUrl) {
   }
 }
 
-// Generate unique site ID
 function generateId() {
   const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
   let id = "";
@@ -233,7 +220,6 @@ function generateId() {
   return id;
 }
 
-// Send Telegram message
 async function sendMessage(token, chatId, text) {
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
   await fetch(url, {
@@ -248,7 +234,6 @@ async function sendMessage(token, chatId, text) {
   });
 }
 
-// Generate website with Gemini
 async function generateWebsite(userPrompt, tier, apiKey) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`;
 
@@ -262,31 +247,49 @@ async function generateWebsite(userPrompt, tier, apiKey) {
 Return ONLY the complete HTML file with inline CSS and JavaScript. No explanations, no markdown, no code fences, just the raw HTML code starting with <!DOCTYPE html>.
 Make it modern, responsive, and beautiful.`;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{
-        parts: [{
-          text: systemPrompt + "\n\nUser request: " + userPrompt
-        }]
-      }],
-      safetySettings: [
-        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-      ]
-    })
-  });
+  // Retry up to 3 times if the AI service is busy
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: systemPrompt + "\n\nUser request: " + userPrompt
+            }]
+          }],
+          safetySettings: [
+            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+          ]
+        })
+      });
 
-  const data = await response.json();
+      const data = await response.json();
 
-  if (data.candidates && data.candidates[0] && data.candidates[0].content) {
-    let code = data.candidates[0].content.parts[0].text;
-    code = code.replace(/```html\n?/g, "").replace(/```\n?/g, "").trim();
-    return code;
+      if (data.candidates && data.candidates[0] && data.candidates[0].content) {
+        let code = data.candidates[0].content.parts[0].text;
+        code = code.replace(/```html\n?/g, "").replace(/```\n?/g, "").trim();
+        return code;
+      }
+
+      // If server is busy (503), wait and retry
+      if (data.error && (data.error.code === 503 || data.error.code === 500)) {
+        await new Promise(r => setTimeout(r, 3000));
+        continue;
+      }
+
+      // Any other error, stop retrying
+      break;
+
+    } catch (err) {
+      await new Promise(r => setTimeout(r, 3000));
+      continue;
+    }
   }
 
-  return "Sorry, I couldn't generate the website. Error: " + JSON.stringify(data).substring(0, 200);
-          }
+  return "⏳ *WebPanda is busy right now.*\n\nOur servers are handling a lot of requests at the moment. Please try again in a minute.";
+  }
