@@ -6,5 +6,12 @@ compatibility_date = "2024-01-01"
 binding = "SITES"
 id = "274fee542dd64452a48a4ad0521be21a"
 
-[triggers]
-crons = ["*/5 * * * *"]
+[[queues.producers]]
+binding = "JOB_QUEUE"
+queue = "website-jobs"
+
+[[queues.consumers]]
+queue = "website-jobs"
+max_batch_size = 1
+max_batch_timeout = 5
+max_retries = 3
