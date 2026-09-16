@@ -7,4 +7,4 @@ binding = "SITES"
 id = "274fee542dd64452a48a4ad0521be21a"
 
 [triggers]
-crons = ["* * * * *"]
+crons = ["*/5 * * * *"]
