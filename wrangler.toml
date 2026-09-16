@@ -6,6 +6,11 @@ compatibility_date = "2024-01-01"
 binding = "SITES"
 id = "274fee542dd64452a48a4ad0521be21a"
 
+[[d1_databases]]
+binding = "BLOG_DB"
+database_name = "webpanda-blog"
+database_id = "f14e7762-bafc-47a6-9e54-d11eeb7a975b"
+
 [[queues.producers]]
 binding = "JOB_QUEUE"
 queue = "website-jobs"
