@@ -48,7 +48,7 @@ export default {
     return new Response("OK", { status: 200 });
   },
 
-  async queue(batch, env) {
+    async queue(batch, env) {
     for (const message of batch.messages) {
       try {
         const job = message.body;
@@ -63,6 +63,10 @@ export default {
         message.retry();
       }
     }
+  },
+
+  async scheduled(event, env, ctx) {
+    // No-op: legacy cron trigger, safe to ignore
   }
 };
 
